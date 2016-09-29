@@ -1,0 +1,84 @@
+#!/usr/bin/python
+
+import argparse
+import datetime
+import math
+import sys
+import time
+import urlparse
+
+import requests  # http://python-requests.org
+
+start_time = time.time()
+
+parser = argparse.ArgumentParser()
+parser.add_argument('item')
+parser.add_argument('-H', '--host', default='localhost', help='Name of the host running OpenHAB.')
+parser.add_argument('-p', '--port', help='Port on which to connect to OpenHAB host.  Defaults to 80 for HTTP and 443 for HTTPS.')
+parser.add_argument('-s', '--ssl', action='store_true', help='Use SSL for this connection.')
+parser.add_argument(      '--start', type=int, help='Starting value for the item.  If unset, the item\'s current value will be used.')
+parser.add_argument(      '--end', type=int, help='Ending value for the item.')
+parser.add_argument(      '--duration', type=int, help='Duration of time, in seconds.')
+parser.add_argument(      '--step', type=int, default=1, help='Step increment for intermediate values.  Defaults to 1.')
+parser.add_argument('-v', '--verbose', action='store_true', help='Be verbose about script actions.')
+args = parser.parse_args()
+
+# Set default port.
+if args.port is None:
+    if args.ssl:
+        args.port = 443
+    else:
+        args.port = 80
+
+def get_item_url(args, item):
+    return urlparse.urlunsplit(('https' if args.ssl else 'http','{}:{}'.format(args.host, args.port), '/rest/items/{}/state'.format(item), None, None))
+
+def set_item(args, item, value):
+    clamped_value = value
+    if 'min' in args:
+        clamped_value = max(clamped_value, args.min)
+    if 'max' in args:
+        clamped_value = min(clamped_value, args.max)
+    r = requests.put(get_item_url(args, item), str(clamped_value))
+    r.raise_for_status()
+    if args.verbose:
+        print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), item, clamped_value)
+
+if args.start is not None:
+    # Get this set as soon as possible.
+    set_item(args, args.item, args.start)
+else:
+    r = requests.get(get_item_url(args, args.item))
+    r.raise_for_status()
+    args.start = int(r.text)
+
+# Ensure step direction matches endpoints.
+args.step = math.copysign(args.step, args.end - args.start)
+
+# Thresholds.
+if args.step > 0:
+    args.max = args.end
+    args.min = args.start
+else:
+    args.max = args.start
+    args.min = args.end
+        
+end_time = start_time + args.duration
+slope = (args.end - args.start) / (end_time - start_time)
+intercept = args.start - slope * start_time
+if args.verbose:
+    print 'y = {} * x + {}'.format(slope, intercept)
+
+current_value = args.start
+while time.time() < end_time:
+    next_value = current_value + args.step
+    next_time = (next_value - intercept) / slope
+    sleep_interval = next_time - time.time()
+    if sleep_interval > 0:
+        time.sleep(sleep_interval)
+    # Recalculate the desired current value to account for time instability.
+    current_value = int(round(slope * time.time() + intercept))
+    set_item(args, args.item, current_value)
+
+# Ensure that the final value was hit.
+set_item(args, args.item, args.end)

@@ -1,9 +1,10 @@
 
-* Set an item gradually.
-   
 * Use a config file as an alternative to cli parameters.
 
+* Documentation
+
 * "Scripts", with multiple items set at different times and rates.
+   Note: separate from config file containing configuration parameters.
 
 * Scripts including single-setting of items.
    e.g., "ramp value A from 0 to 100 over 60 seconds, and set value B to
@@ -12,4 +13,8 @@
 * MQTT backend
    Will still need to use REST to get current value.  (Maybe require
    explicit starting points if using MQTT.)
+
+* Options for "increase only" or "decrease only".
+   For when, say, you want to brighten a lamp from wherever it is to 75%,
+   but only if it's currently dimmer than 80%.
 
