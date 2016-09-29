@@ -1,4 +1,12 @@
 
+* Monitor an item to determine whether to continue.
+   Configuration is: item name, termination value (stop if the item ever
+   has this value), initialization value (optional, but set item to this
+   value before starting loop).
+
+   Maybe allow a threshold?  Rather than "item == value", stop if "item <
+   value" or "item > value".
+
 * Use a config file as an alternative to cli parameters.
 
 * Documentation
@@ -11,8 +19,10 @@
    100 30 seconds in."
 
 * MQTT backend
-   Will still need to use REST to get current value.  (Maybe require
-   explicit starting points if using MQTT.)
+   Will need separate configuration for getting and setting values.
+   Missing sides will fall back to REST.  Will need to complain if we need
+   a starting value and can't get one (e.g. because there were no retained
+   messages for that item on the MQTT broker).
 
 * Options for "increase only" or "decrease only".
    For when, say, you want to brighten a lamp from wherever it is to 75%,
