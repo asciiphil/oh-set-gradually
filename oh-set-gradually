@@ -12,14 +12,14 @@ import requests  # http://python-requests.org
 start_time = time.time()
 
 parser = argparse.ArgumentParser()
-parser.add_argument('item')
-parser.add_argument('-H', '--host', default='localhost', help='Name of the host running OpenHAB.')
+parser.add_argument('item', help='Name of the item to modify.')
+parser.add_argument('-H', '--host', default='localhost', help='Name of the host running OpenHAB.  Defaults to localhost.')
 parser.add_argument('-p', '--port', help='Port on which to connect to OpenHAB host.  Defaults to 80 for HTTP and 443 for HTTPS.')
 parser.add_argument('-s', '--ssl', action='store_true', help='Use SSL for this connection.')
 parser.add_argument(      '--start', type=int, help='Starting value for the item.  If unset, the item\'s current value will be used.')
 parser.add_argument(      '--end', type=int, help='Ending value for the item.')
 parser.add_argument(      '--duration', type=int, help='Duration of time, in seconds.')
-parser.add_argument(      '--step', type=int, default=1, help='Step increment for intermediate values.  Defaults to 1.')
+parser.add_argument(      '--step', type=int, default=1, help='Target step increment for intermediate values.  Defaults to 1.')
 parser.add_argument('-v', '--verbose', action='store_true', help='Be verbose about script actions.')
 args = parser.parse_args()
 
