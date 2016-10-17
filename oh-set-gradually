@@ -31,7 +31,10 @@ if args.port is None:
         args.port = 80
 
 def get_item_url(args, item):
-    return urlparse.urlunsplit(('https' if args.ssl else 'http','{}:{}'.format(args.host, args.port), '/rest/items/{}/state'.format(item), None, None))
+    return urlparse.urlunsplit(('https' if args.ssl else 'http','{}:{}'.format(args.host, args.port), '/rest/items/{}'.format(item), None, None))
+
+def get_state_url(args, item):
+    return get_item_url(args, item) + '/state'
 
 def set_item(args, item, value):
     clamped_value = value
@@ -39,7 +42,7 @@ def set_item(args, item, value):
         clamped_value = max(clamped_value, args.min)
     if 'max' in args:
         clamped_value = min(clamped_value, args.max)
-    r = requests.put(get_item_url(args, item), str(clamped_value))
+    r = requests.post(get_item_url(args, item), str(clamped_value))
     r.raise_for_status()
     if args.verbose:
         print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), item, clamped_value)
@@ -48,7 +51,7 @@ if args.start is not None:
     # Get this set as soon as possible.
     set_item(args, args.item, args.start)
 else:
-    r = requests.get(get_item_url(args, args.item))
+    r = requests.get(get_state_url(args, args.item))
     r.raise_for_status()
     args.start = int(r.text)
 
@@ -62,7 +65,12 @@ if args.step > 0:
 else:
     args.max = args.start
     args.min = args.end
-        
+
+# y = mx + b
+# In this case,
+#   y = item value
+#   x = time
+#   desired_value = slope * time.time() + intercept
 end_time = start_time + args.duration
 slope = (args.end - args.start) / (end_time - start_time)
 intercept = args.start - slope * start_time
@@ -76,7 +84,8 @@ while time.time() < end_time:
     sleep_interval = next_time - time.time()
     if sleep_interval > 0:
         time.sleep(sleep_interval)
-    # Recalculate the desired current value to account for time instability.
+    # Recalculate the desired current value to account for times when
+    # time.sleep() is imprecise.
     current_value = int(round(slope * time.time() + intercept))
     set_item(args, args.item, current_value)
 
