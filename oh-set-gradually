@@ -8,78 +8,115 @@ import time
 import urlparse
 
 import requests  # http://python-requests.org
+import toml      # https://github.com/uiri/toml
 
 start_time = time.time()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('item', help='Name of the item to modify.')
-parser.add_argument('-H', '--host', default='localhost', help='Name of the host running OpenHAB.  Defaults to localhost.')
+parser.add_argument('-c', '--config', help='File containing parameters for connecting to an OpenHAB instance.')
+parser.add_argument('-H', '--host', help='Name of the host running OpenHAB.  Defaults to localhost.')
 parser.add_argument('-p', '--port', help='Port on which to connect to OpenHAB host.  Defaults to 80 for HTTP and 443 for HTTPS.')
-parser.add_argument('-s', '--ssl', action='store_true', help='Use SSL for this connection.')
+parser.add_argument('-s', '--ssl', action='store_const', const=True, help='Use SSL for this connection.')
+parser.add_argument(      '--no-ssl', action='store_const', const=False, dest='ssl', help='Do not use SSL for this connection.')
 parser.add_argument(      '--start', type=int, help='Starting value for the item.  If unset, the item\'s current value will be used.')
 parser.add_argument(      '--end', type=int, help='Ending value for the item.')
 parser.add_argument(      '--duration', type=int, help='Duration of time, in seconds.')
 parser.add_argument(      '--step', type=int, default=1, help='Target step increment for intermediate values.  Defaults to 1.')
 parser.add_argument('-v', '--verbose', action='store_true', help='Be verbose about script actions.')
-args = parser.parse_args()
+parsed_args = parser.parse_args()
 
-# Set default port.
-if args.port is None:
-    if args.ssl:
-        args.port = 443
-    else:
-        args.port = 80
+class Config:
+    def __init__(self, parsed_args):
+        if parsed_args.config is not None:
+            config_args = toml.load(parsed_args.config)
+        else:
+            config_args = {}
 
-def get_item_url(args, item):
-    return urlparse.urlunsplit(('https' if args.ssl else 'http','{}:{}'.format(args.host, args.port), '/rest/items/{}'.format(item), None, None))
+        if parsed_args.host is not None:
+            self.rest_hostname = parsed_args.host
+        elif 'rest' in config_args and 'host' in config_args['rest']:
+            self.rest_hostname = config_args['rest']['host']
+        else:
+            self.rest_hostname = 'localhost'
 
-def get_state_url(args, item):
-    return get_item_url(args, item) + '/state'
+        if parsed_args.ssl is not None:
+            self.rest_ssl = parsed_args.ssl
+        elif 'rest' in config_args and 'ssl' in config_args['rest']:
+            if config_args['rest']['ssl'] not in (True, False):
+                print >>sys.stderr, 'rest.ssl config must be "true" or "false"'
+                exit(1)
+            self.rest_ssl = config_args['rest']['ssl']
+        else:
+            self.rest_ssl = False
+            
+        if parsed_args.port is not None:
+            self.rest_port = parsed_args.port
+        elif 'rest' in config_args and 'port' in config_args['rest']:
+            if not isinstance(config_args['rest']['port'], (int, long)):
+                print >>sys.stderr, 'rest.port config must be an integer'
+                exit(1)
+            self.rest_port = config_args['rest']['port']
+        elif self.rest_ssl:
+            self.rest_port = 443
+        else:
+            self.rest_port = 80
 
-def set_item(args, item, value):
+        self.verbose = parsed_args.verbose
+
+
+def get_item_url(config, item):
+    return urlparse.urlunsplit(('https' if config.rest_ssl else 'http','{}:{}'.format(config.rest_hostname, config.rest_port), '/rest/items/{}'.format(item), None, None))
+
+def get_state_url(config, item):
+    return get_item_url(config, item) + '/state'
+
+def set_item(config, args, item, value):
     clamped_value = value
     if 'min' in args:
         clamped_value = max(clamped_value, args.min)
     if 'max' in args:
         clamped_value = min(clamped_value, args.max)
-    r = requests.post(get_item_url(args, item), str(clamped_value))
+    r = requests.post(get_item_url(config, item), str(clamped_value))
     r.raise_for_status()
-    if args.verbose:
+    if config.verbose:
         print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), item, clamped_value)
 
-if args.start is not None:
+config = Config(parsed_args)
+        
+if parsed_args.start is not None:
     # Get this set as soon as possible.
-    set_item(args, args.item, args.start)
+    set_item(config, parsed_args, parsed_args.item, parsed_args.start)
 else:
-    r = requests.get(get_state_url(args, args.item))
+    r = requests.get(get_state_url(config, parsed_args.item))
     r.raise_for_status()
-    args.start = int(r.text)
+    parsed_args.start = int(r.text)
 
 # Ensure step direction matches endpoints.
-args.step = math.copysign(args.step, args.end - args.start)
+parsed_args.step = math.copysign(parsed_args.step, parsed_args.end - parsed_args.start)
 
 # Thresholds.
-if args.step > 0:
-    args.max = args.end
-    args.min = args.start
+if parsed_args.step > 0:
+    parsed_args.max = parsed_args.end
+    parsed_args.min = parsed_args.start
 else:
-    args.max = args.start
-    args.min = args.end
+    parsed_args.max = parsed_args.start
+    parsed_args.min = parsed_args.end
 
 # y = mx + b
 # In this case,
 #   y = item value
 #   x = time
 #   desired_value = slope * time.time() + intercept
-end_time = start_time + args.duration
-slope = (args.end - args.start) / (end_time - start_time)
-intercept = args.start - slope * start_time
-if args.verbose:
+end_time = start_time + parsed_args.duration
+slope = (parsed_args.end - parsed_args.start) / (end_time - start_time)
+intercept = parsed_args.start - slope * start_time
+if config.verbose:
     print 'y = {} * x + {}'.format(slope, intercept)
 
-current_value = args.start
+current_value = parsed_args.start
 while time.time() < end_time:
-    next_value = current_value + args.step
+    next_value = current_value + parsed_args.step
     next_time = (next_value - intercept) / slope
     sleep_interval = next_time - time.time()
     if sleep_interval > 0:
@@ -87,7 +124,7 @@ while time.time() < end_time:
     # Recalculate the desired current value to account for times when
     # time.sleep() is imprecise.
     current_value = int(round(slope * time.time() + intercept))
-    set_item(args, args.item, current_value)
+    set_item(config, parsed_args, parsed_args.item, current_value)
 
 # Ensure that the final value was hit.
-set_item(args, args.item, args.end)
+set_item(config, parsed_args, parsed_args.item, parsed_args.end)

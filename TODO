@@ -7,8 +7,6 @@
    Maybe allow a threshold?  Rather than "item == value", stop if "item <
    value" or "item > value".
 
-* Use a config file as an alternative to cli parameters.
-
 * Documentation
 
 * "Scripts", with multiple items set at different times and rates.

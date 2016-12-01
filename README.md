@@ -19,9 +19,39 @@ Installation
 and the following modules:
 
  * [requests](http://python-requests.org)
+ * [toml](https://github.com/uiri/toml)
 
 Use
 ---
 
     oh-set-gradually --help
-    
+
+OpenHAB Communication
+---------------------
+
+At the moment, only OpenHAB's REST interface is supported.  By default,
+the program will connect to localhost on port 80.  You can change that
+either via command line options or a configuration file.
+
+### Config File
+
+Create a [TOML](https://github.com/toml-lang/toml) configuration file,
+with any of `host`, `port`, and `ssl` values in a `rest` section.  e.g.:
+
+    [rest]
+    host = "openhab.example.com"
+    port = 8443
+    ssl = true
+
+Pass the config file to `oh-set-gradually` via command line options:
+
+    oh-set-gradually --config openhab.toml ...
+
+### Command Line
+
+The `--host`, `--port`, and `--ssl` parameters can be used.  e.g.:
+
+    oh-set-gradually --host openhab.example.com --port 8443 --ssl ...
+
+Command line parameters override configuration file parameters.  If the
+config file has `ssl = true`, you can override it with `--no-ssl`.
