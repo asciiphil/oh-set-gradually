@@ -64,67 +64,84 @@ class Config:
 
         self.verbose = parsed_args.verbose
 
+class ItemChange:
+    def __init__(self, config, item_name, time_bounds, value_bounds, step=1):
+        # Basics
+        self.config = config
+        self.item_name = item_name
+        self.start_time = time_bounds[0]
+        self.end_time = time_bounds[1]
+        self.start_value = value_bounds[0]
+        self.end_value = value_bounds[1]
+        self.step = step
 
-def get_item_url(config, item):
-    return urlparse.urlunsplit(('https' if config.rest_ssl else 'http','{}:{}'.format(config.rest_hostname, config.rest_port), '/rest/items/{}'.format(item), None, None))
+        # Use current value as starting point if it's not defined.
+        # FIXME: This should really be initialized the first time it's
+        #        needed after the start time has passed.
+        if self.start_value is None:
+            r = requests.get(self.item_state_url)
+            r.raise_for_status()
+            self.start_value = int(r.text)
 
-def get_state_url(config, item):
-    return get_item_url(config, item) + '/state'
+        # Check step direction, fix if necessary.
+        implied_step = math.copysign(self.step, self.end_value - self.start_value)
+        if step != implied_step:
+            print >>sys.stderr, '{}: {}..{} sign mismatch: requested {}, but should be {}.'.format(self.item_name, self.start_value, self.end_value, self.step, implied_step)
+            self.step = implied_step
 
-def set_item(config, args, item, value):
-    clamped_value = value
-    if 'min' in args:
-        clamped_value = max(clamped_value, args.min)
-    if 'max' in args:
-        clamped_value = min(clamped_value, args.max)
-    r = requests.post(get_item_url(config, item), str(clamped_value))
-    r.raise_for_status()
-    if config.verbose:
-        print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), item, clamped_value)
+        # Set value limits
+        if self.step > 0:
+            self.max_value = self.end_value
+            self.min_value = self.start_value
+        else:
+            self.max_value = self.start_value
+            self.min_value = self.end_value
+
+        # Set linear equation coefficients.
+        # y = mx + b
+        # In this case,
+        #   y = item value
+        #   x = time
+        #   desired_value = slope * time.time() + intercept
+        self.slope = (self.end_value - self.start_value) / (self.end_time - self.start_time)
+        self.intercept = self.start_value - self.slope * self.start_time
+        if self.config.verbose:
+            print 'y = {} * x + {}'.format(self.slope, self.intercept)
+
+        self.current_value = self.start_value
+        
+    @property
+    def item_url(self):
+        return urlparse.urlunsplit(('https' if self.config.rest_ssl else 'http','{}:{}'.format(self.config.rest_hostname, self.config.rest_port), '/rest/items/{}'.format(self.item_name), None, None))
+
+    @property
+    def item_state_url(self):
+        return self.item_url + '/state'
+
+    @property
+    def time_to_next_step(self):
+        next_value = self.current_value + self.step
+        next_time = (next_value - self.intercept) / self.slope
+        return max(0, next_time - time.time())
+        
+    def set_item(self):
+        clamped_value = min(max(int(round(self.slope * time.time() + self.intercept)),
+                                self.min_value),
+                            self.max_value)
+        r = requests.post(self.item_url, str(clamped_value))
+        r.raise_for_status()
+        self.current_value = clamped_value
+        if self.config.verbose:
+            print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.current_value)
 
 config = Config(parsed_args)
-        
-if parsed_args.start is not None:
-    # Get this set as soon as possible.
-    set_item(config, parsed_args, parsed_args.item, parsed_args.start)
-else:
-    r = requests.get(get_state_url(config, parsed_args.item))
-    r.raise_for_status()
-    parsed_args.start = int(r.text)
 
-# Ensure step direction matches endpoints.
-parsed_args.step = math.copysign(parsed_args.step, parsed_args.end - parsed_args.start)
-
-# Thresholds.
-if parsed_args.step > 0:
-    parsed_args.max = parsed_args.end
-    parsed_args.min = parsed_args.start
-else:
-    parsed_args.max = parsed_args.start
-    parsed_args.min = parsed_args.end
-
-# y = mx + b
-# In this case,
-#   y = item value
-#   x = time
-#   desired_value = slope * time.time() + intercept
 end_time = start_time + parsed_args.duration
-slope = (parsed_args.end - parsed_args.start) / (end_time - start_time)
-intercept = parsed_args.start - slope * start_time
-if config.verbose:
-    print 'y = {} * x + {}'.format(slope, intercept)
+item_change = ItemChange(config, parsed_args.item, (start_time, end_time), (parsed_args.start, parsed_args.end), parsed_args.step)
 
-current_value = parsed_args.start
-while time.time() < end_time:
-    next_value = current_value + parsed_args.step
-    next_time = (next_value - intercept) / slope
-    sleep_interval = next_time - time.time()
-    if sleep_interval > 0:
-        time.sleep(sleep_interval)
-    # Recalculate the desired current value to account for times when
-    # time.sleep() is imprecise.
-    current_value = int(round(slope * time.time() + intercept))
-    set_item(config, parsed_args, parsed_args.item, current_value)
-
+item_change.set_item()
+while time.time() < item_change.end_time:
+    time.sleep(item_change.time_to_next_step)
+    item_change.set_item()
 # Ensure that the final value was hit.
-set_item(config, parsed_args, parsed_args.item, parsed_args.end)
+item_change.set_item()
