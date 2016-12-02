@@ -9,13 +9,6 @@
 
 * Documentation
 
-* "Scripts", with multiple items set at different times and rates.
-   Note: separate from config file containing configuration parameters.
-
-* Scripts including single-setting of items.
-   e.g., "ramp value A from 0 to 100 over 60 seconds, and set value B to
-   100 30 seconds in."
-
 * MQTT backend
    Will need separate configuration for getting and setting values.
    Missing sides will fall back to REST.  Will need to complain if we need
