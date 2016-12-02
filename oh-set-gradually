@@ -207,6 +207,7 @@ if parsed_args.script is not None:
        parsed_args.item is not None:
         print >>sys.stderr, '--item is mutually exclusive with giving a script.'
         exit(1)
+    parsed_args.script.seek(0)
     changes = []
     for c in toml.load(parsed_args.script)['changes']:
         changes.append(ItemChange.from_toml(config, c, start_time))
