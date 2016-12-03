@@ -128,6 +128,10 @@ class ItemChange:
 
     def __repr__(self):
         return '<ItemChange({}: {}..{} {}-{})>'.format(self.item_name, self.start_values, self.end_values, self.start_time, self.end_time)
+
+    @property
+    def formatted_info(self):
+        return (time.strftime('%H:%M:%S', time.localtime(self.start_time)), time.strftime('%H:%M:%S', time.localtime(self.end_time)), self.item_name, ','.join([str(v) for v in self.start_values]) if self.start_values is not None else '', ','.join([str(v) for v in self.end_values]))
     
     def set_current_value_from_openhab(self):
         r = requests.get(self.item_url)
@@ -162,7 +166,7 @@ class ItemChange:
         #   desired_value = slope * time.time() + intercept
         self.slopes = [ (ev - sv) / (self.end_time - self.start_time) for (sv, ev) in zip(self.start_values, self.end_values) ]
         self.intercepts = [ sv - slope * self.start_time for (sv, slope) in zip(self.start_values, self.slopes) ]
-        if self.config.verbose:
+        if self.config.debug:
             print self.item_name + ':'
             for (i, (slope, intercept)) in enumerate(zip(self.slopes, self.intercepts)):
                 print '  y_{} = {} * x_{} + {}'.format(i, slope, i, intercept)
@@ -234,6 +238,10 @@ class ItemSet:
 
     def __repr__(self):
         return '<ItemSet({}: {} {})>'.format(self.item_name, self.set_value, self.set_time)
+
+    @property
+    def formatted_info(self):
+        return (time.strftime('%H:%M:%S', time.localtime(self.set_time)), '', self.item_name, '', self.set_value)
     
     @property
     def item_url(self):
@@ -269,8 +277,14 @@ else:
     end_time = start_time + parsed_args.duration
     changes = [ItemChange(config, parsed_args.item, (start_time, end_time), (parsed_args.start, parsed_args.end), parsed_args.step)]
 
-if config.debug:
-    print 'changes:', changes
+changes.sort(key=lambda c: (c.start_time, c.end_time, c.item_name))
+if config.verbose:
+    change_info = [c.formatted_info for c in changes]
+    col_widths = [max([len(v) for v in col]) for col in zip(*change_info)]
+    print '-+-'.join(['-' * w for w in col_widths])
+    for c in change_info:
+        print ' | '.join([v.ljust(w) for w, v in zip(col_widths, c)])
+    print '-+-'.join(['-' * w for w in col_widths])
     
 foo = 0
 last_end_time = max([c.end_time for c in changes])
