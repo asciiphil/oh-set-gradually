@@ -71,11 +71,17 @@ keys:
 * `start_value` - Optional.  The value at which to start the change.  If
   omitted, the script will retrieve the current value from OpenHAB at the
   time this change begins to take effect (given by `start_time`, below).
+  Can be either an integer or an array of integers.  Arrays are primarily
+  useful for Color items, for which the three members represent hue,
+  saturation, and brightness.  If an array is used, the number of items in
+  the array must match the `end_value` setting.
 * `start_time` - Optional.  When to start applying this change, given as a
   number of seconds after the time the script was started.  If omitted,
   the value is assumed to be zero, meaning the change will start
   immediately.
-* `end_value` - **Required**.  The target value for the change.
+* `end_value` - **Required**.  The target value for the change.  Can be an
+  integer, an array of integers, or a string.  Strings are only valid if
+  `duration` is zero.
 * `duration` - Optional.  How long, in seconds, after the `start_time`
   until the item should be set to the `end_value`.  If omitted, the value
   is assumed to be zero, which means that the `end_value` will be applied
@@ -84,7 +90,9 @@ keys:
   setting it again.  Note that this is advisory; if you have several items
   changing simultaneously, the script sets all of them according to the
   schedule of the fastest-changing item.  The default is 1 (or -1, if the
-  `end_value` is less than the `start_value`).
+  `end_value` is less than the `start_value`).  If `start_value` and
+  `end_value` are arrays, `step` must be, too, and must have the same
+  number of members.
 
 Note that you can put your OpenHAB connection parameters into the same
 file as your script.  In that case, you can omit the `-c` parameter on the

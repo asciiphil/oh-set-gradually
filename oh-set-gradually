@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import argparse
+import collections
 import datetime
 import json
 import math
@@ -28,6 +29,11 @@ parser.add_argument(      '--step', type=int, help='Target step increment for in
 parser.add_argument(      '--item', help='Name of the item to modify.')
 parser.add_argument('script', nargs='?', type=argparse.FileType('r'), help='Script to run.')
 parsed_args = parser.parse_args()
+
+def is_nonstring_sequence(obj):
+    if isinstance(obj, basestring):
+        return False
+    return isinstance(obj, collections.Sequence)
 
 class Config:
     def __init__(self, parsed_args):
@@ -77,71 +83,76 @@ class ItemChange:
             start_time = init_time + toml_dict['start_time']
         else:
             start_time = init_time
+            
         if 'duration' in toml_dict:
             end_time = start_time + toml_dict['duration']
         else:
             end_time = start_time
+            
         if 'start_value' in toml_dict:
             start_value = toml_dict['start_value']
         else:
             start_value = None
 
+        end_value = toml_dict['end_value']
+        step = toml_dict['step'] if 'step' in toml_dict else None
+            
         if start_time == end_time:
-            return ItemSet(config, toml_dict['item'], end_time, toml_dict['end_value'])
+            return ItemSet(config, toml_dict['item'], end_time, end_value)
         else:
+            if not is_nonstring_sequence(end_value):
+                end_value = (end_value,)
+                if start_value is not None:
+                    start_value = (start_value,)
+                if step is not None:
+                    step = (step,)
             return ItemChange(config,
                               toml_dict['item'],
                               (start_time, end_time),
-                              (start_value, toml_dict['end_value']),
-                              toml_dict['step'] if 'step' in toml_dict else None)
+                              (start_value, end_value),
+                              step)
     
-    def __init__(self, config, item_name, time_bounds, value_bounds, step=None):
+    def __init__(self, config, item_name, time_bounds, value_bounds, steps=None):
         # Basics
         self.config = config
         self.item_name = item_name
-        self.start_time = time_bounds[0]
-        self.end_time = time_bounds[1]
-        self.start_value = value_bounds[0]
-        self.end_value = value_bounds[1]
-        self.step = step
-
-        self.started = False
-        self.current_value = None
+        self.start_time, self.end_time = time_bounds
+        self.start_values, self.end_values = value_bounds
+        self.steps = steps
         
-        if self.start_value is not None:
+        self.started = False
+        self.current_values = None
+        
+        if self.start_values is not None:
             self.calculate_params()
 
     def __repr__(self):
-        return '<ItemChange({}: {}..{} {}-{})>'.format(self.item_name, self.start_value, self.end_value, self.start_time, self.end_time)
+        return '<ItemChange({}: {}..{} {}-{})>'.format(self.item_name, self.start_values, self.end_values, self.start_time, self.end_time)
     
     def set_current_value_from_openhab(self):
         r = requests.get(self.item_url)
         r.raise_for_status()
         s = json.loads(r.text)
-        if s['type'] == 'Color':
-            self.current_value = int(s['state'].split(',')[-1])
+        if s['type'] == 'Color' and len(self.end_values) == 1:
+            self.current_values = int(s['state'].split(',')[-1])
         else:
-            self.current_value = int(s['state'])
+            self.current_values = [int(v) for v in s['state'].split(',')]
         if self.config.verbose:
-            print '{} {}: fetched current state {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.current_value)
+            print '{} {}: fetched current state {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.current_values)
 
     def calculate_params(self):
-        if self.step is None:
-            self.step = math.copysign(1, self.end_value - self.start_value)
+        if self.steps is None:
+            self.steps = [ math.copysign(1, ev - sv) for (sv, ev) in zip(self.start_values, self.end_values) ]
             
         # Check step direction, fix if necessary.
-        implied_step = math.copysign(self.step, self.end_value - self.start_value)
-        if self.step != implied_step:
-            print >>sys.stderr, '{}: {}..{} sign mismatch: requested {}, but should be {}.'.format(self.item_name, self.start_value, self.end_value, self.step, implied_step)
-            self.step = implied_step
+        implied_steps = [ math.copysign(1, ev - sv) for (sv, ev) in zip(self.start_values, self.end_values) ]
+        if self.steps != implied_steps:
+            print >>sys.stderr, '{}: {}..{} sign(s) mismatch: requested {}, but should be {}.'.format(self.item_name, self.start_values, self.end_values, self.steps, implied_steps)
+            self.steps = implied_steps
 
         # Set value limits
-        if self.step > 0:
-            self.max_value = self.end_value
-            self.min_value = self.start_value
-        else:
-            self.max_value = self.start_value
-            self.min_value = self.end_value
+        self.min_values = [ sv if step > 0 else ev for (sv, ev, step) in zip(self.start_values, self.end_values, self.steps) ]
+        self.max_values = [ ev if step > 0 else sv for (sv, ev, step) in zip(self.start_values, self.end_values, self.steps) ]
 
         # Set linear equation coefficients.
         # y = mx + b
@@ -149,10 +160,12 @@ class ItemChange:
         #   y = item value
         #   x = time
         #   desired_value = slope * time.time() + intercept
-        self.slope = (self.end_value - self.start_value) / (self.end_time - self.start_time)
-        self.intercept = self.start_value - self.slope * self.start_time
+        self.slopes = [ (ev - sv) / (self.end_time - self.start_time) for (sv, ev) in zip(self.start_values, self.end_values) ]
+        self.intercepts = [ sv - slope * self.start_time for (sv, slope) in zip(self.start_values, self.slopes) ]
         if self.config.verbose:
-            print '{}: y = {} * x + {}'.format(self.item_name, self.slope, self.intercept)
+            print self.item_name + ':'
+            for (i, (slope, intercept)) in enumerate(zip(self.slopes, self.intercepts)):
+                print '  y_{} = {} * x_{} + {}'.format(i, slope, i, intercept)
         
     @property
     def item_url(self):
@@ -163,14 +176,15 @@ class ItemChange:
         if not self.started:
             # Not yet started; next time we have to do something is our start time.
             next_time = self.start_time
-        elif self.current_value is None or self.end_time <= time.time():
+        elif self.current_values is None or self.end_time <= time.time():
             # Somehow we've started, but haven't set a value yet.  Or it's
             # past our end time.  Either way, do something now.
             return 0
         else:
             # How long will it be before we next need to update?
-            next_value = self.current_value + self.step
-            next_time = (next_value - self.intercept) / self.slope
+            next_values = [ cv + step for cv, step in zip(self.current_values, self.steps) ]
+            next_times = [ (nv - intercept) / slope if slope != 0 else float('inf') for nv, intercept, slope in zip(next_values, self.intercepts, self.slopes) ]
+            next_time = min(next_times)
         return max(0, next_time - time.time())
         
     def set_item(self):
@@ -179,22 +193,25 @@ class ItemChange:
             return
         self.started = True
         if self.end_time <= time.time():
-            clamped_value = self.end_value
+            clamped_values = self.end_values
         else:
             # If the starting value is unset, pull it from the current state on OpenHAB.
-            if self.start_value is None:
+            if self.start_values is None:
                 self.set_current_value_from_openhab()
-                self.start_value = self.current_value
+                self.start_values = self.current_values
                 self.calculate_params()
-            clamped_value = min(max(int(round(self.slope * time.time() + self.intercept)),
-                                    self.min_value),
-                                self.max_value)
-        if clamped_value != self.current_value:
-            r = requests.post(self.item_url, str(clamped_value))
+            ref_time = time.time()
+            clamped_values = [min(max(int(round(slope * ref_time + intercept)),
+                                      min_value),
+                                  max_value)
+                              for slope, intercept, min_value, max_value
+                              in zip(self.slopes, self.intercepts, self.min_values, self.max_values)]
+        if clamped_values != self.current_values:
+            r = requests.post(self.item_url, ','.join([str(cv) for cv in clamped_values]))
             r.raise_for_status()
-            self.current_value = clamped_value
+            self.current_values = clamped_values
             if self.config.verbose:
-                print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.current_value)
+                print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.current_values)
 
 class ItemSet:
     """When an item is set once."""
@@ -204,7 +221,10 @@ class ItemSet:
         self.config = config
         self.item_name = item_name
         self.set_time = set_time
-        self.set_value = set_value
+        if is_nonstring_sequence(set_value):
+            self.set_value = ','.join([str(v) for v in set_value])
+        else:
+            self.set_value = str(set_value)
 
         # Compatibility
         self.start_time = self.set_time
@@ -225,7 +245,7 @@ class ItemSet:
         
     def set_item(self):
         if not self.has_been_set:
-            r = requests.post(self.item_url, str(self.set_value))
+            r = requests.post(self.item_url, self.set_value)
             r.raise_for_status()
             self.has_been_set = True
             if self.config.verbose:
