@@ -86,11 +86,14 @@ class ItemChange:
         else:
             start_value = None
 
-        return ItemChange(config,
-                          toml_dict['item'],
-                          (start_time, end_time),
-                          (start_value, toml_dict['end_value']),
-                          toml_dict['step'] if 'step' in toml_dict else None)
+        if start_time == end_time:
+            return ItemSet(config, toml_dict['item'], end_time, toml_dict['end_value'])
+        else:
+            return ItemChange(config,
+                              toml_dict['item'],
+                              (start_time, end_time),
+                              (start_value, toml_dict['end_value']),
+                              toml_dict['step'] if 'step' in toml_dict else None)
     
     def __init__(self, config, item_name, time_bounds, value_bounds, step=None):
         # Basics
@@ -156,10 +159,6 @@ class ItemChange:
         return urlparse.urlunsplit(('https' if self.config.rest_ssl else 'http','{}:{}'.format(self.config.rest_hostname, self.config.rest_port), '/rest/items/{}'.format(self.item_name), None, None))
 
     @property
-    def item_state_url(self):
-        return self.item_url + '/state'
-
-    @property
     def time_to_next_step(self):
         if not self.started:
             # Not yet started; next time we have to do something is our start time.
@@ -197,6 +196,41 @@ class ItemChange:
             if self.config.verbose:
                 print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.current_value)
 
+class ItemSet:
+    """When an item is set once."""
+    
+    def __init__(self, config, item_name, set_time, set_value):
+        # Basics
+        self.config = config
+        self.item_name = item_name
+        self.set_time = set_time
+        self.set_value = set_value
+
+        # Compatibility
+        self.start_time = self.set_time
+        self.end_time = self.set_time
+        
+        self.has_been_set = False
+
+    def __repr__(self):
+        return '<ItemSet({}: {} {})>'.format(self.item_name, self.set_value, self.set_time)
+    
+    @property
+    def item_url(self):
+        return urlparse.urlunsplit(('https' if self.config.rest_ssl else 'http','{}:{}'.format(self.config.rest_hostname, self.config.rest_port), '/rest/items/{}'.format(self.item_name), None, None))
+
+    @property
+    def time_to_next_step(self):
+        return max(0, self.set_time - time.time())
+        
+    def set_item(self):
+        if not self.has_been_set:
+            r = requests.post(self.item_url, str(self.set_value))
+            r.raise_for_status()
+            self.has_been_set = True
+            if self.config.verbose:
+                print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.set_value)
+                
 config = Config(parsed_args)
 
 if parsed_args.script is not None:
@@ -215,6 +249,9 @@ else:
     end_time = start_time + parsed_args.duration
     changes = [ItemChange(config, parsed_args.item, (start_time, end_time), (parsed_args.start, parsed_args.end), parsed_args.step)]
 
+if config.debug:
+    print 'changes:', changes
+    
 foo = 0
 last_end_time = max([c.end_time for c in changes])
 while time.time() < last_end_time:
