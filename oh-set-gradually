@@ -76,6 +76,39 @@ class Config:
         self.verbose = parsed_args.verbose or parsed_args.debug
         self.debug = parsed_args.debug
 
+class Item:
+    def __init__(self, config, item_name, arity=1):
+        self.config = config
+        self.name = item_name
+        self.arity = arity
+        self.value = None
+
+    @property
+    def item_url(self):
+        return urlparse.urlunsplit(('https' if self.config.rest_ssl else 'http','{}:{}'.format(self.config.rest_hostname, self.config.rest_port), '/rest/items/{}'.format(self.name), None, None))
+
+    def update(self, new_value):
+        if is_nonstring_sequence(new_value):
+            new_value_str = ','.join([str(v) for v in new_value])
+        else:
+            new_value_str = str(new_value)
+        r = requests.post(self.item_url, new_value_str)
+        r.raise_for_status()
+        self.value = new_value
+        if self.config.verbose:
+            print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.name, self.value)
+            
+    def update_from_openhab(self):
+        r = requests.get(self.item_url)
+        r.raise_for_status()
+        s = json.loads(r.text)
+        if s['type'] == 'Color' and self.arity == 1:
+            self.value = int(s['state'].split(',')[-1])
+        else:
+            self.value = [int(v) for v in s['state'].split(',')]
+        if self.config.verbose:
+            print '{} {}: fetched current state {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.name, self.value)
+
 class ItemChange:
     @staticmethod
     def from_toml(config, toml_dict, init_time):
@@ -115,34 +148,23 @@ class ItemChange:
     def __init__(self, config, item_name, time_bounds, value_bounds, steps=None):
         # Basics
         self.config = config
-        self.item_name = item_name
         self.start_time, self.end_time = time_bounds
         self.start_values, self.end_values = value_bounds
+        self.item = Item(config, item_name, len(self.end_values))
         self.steps = steps
         
         self.started = False
-        self.current_values = None
         
         if self.start_values is not None:
             self.calculate_params()
 
     def __repr__(self):
-        return '<ItemChange({}: {}..{} {}-{})>'.format(self.item_name, self.start_values, self.end_values, self.start_time, self.end_time)
+        return '<ItemChange({}: {}..{} {}-{})>'.format(self.item.name, self.start_values, self.end_values, self.start_time, self.end_time)
 
     @property
     def formatted_info(self):
-        return (time.strftime('%H:%M:%S', time.localtime(self.start_time)), time.strftime('%H:%M:%S', time.localtime(self.end_time)), self.item_name, ','.join([str(v) for v in self.start_values]) if self.start_values is not None else '', ','.join([str(v) for v in self.end_values]))
+        return (time.strftime('%H:%M:%S', time.localtime(self.start_time)), time.strftime('%H:%M:%S', time.localtime(self.end_time)), self.item.name, ','.join([str(v) for v in self.start_values]) if self.start_values is not None else '', ','.join([str(v) for v in self.end_values]))
     
-    def set_current_value_from_openhab(self):
-        r = requests.get(self.item_url)
-        r.raise_for_status()
-        s = json.loads(r.text)
-        if s['type'] == 'Color' and len(self.end_values) == 1:
-            self.current_values = int(s['state'].split(',')[-1])
-        else:
-            self.current_values = [int(v) for v in s['state'].split(',')]
-        if self.config.verbose:
-            print '{} {}: fetched current state {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.current_values)
 
     def calculate_params(self):
         if self.steps is None:
@@ -151,7 +173,7 @@ class ItemChange:
         # Check step direction, fix if necessary.
         implied_steps = [ math.copysign(1, ev - sv) for (sv, ev) in zip(self.start_values, self.end_values) ]
         if self.steps != implied_steps:
-            print >>sys.stderr, '{}: {}..{} sign(s) mismatch: requested {}, but should be {}.'.format(self.item_name, self.start_values, self.end_values, self.steps, implied_steps)
+            print >>sys.stderr, '{}: {}..{} sign(s) mismatch: requested {}, but should be {}.'.format(self.item.name, self.start_values, self.end_values, self.steps, implied_steps)
             self.steps = implied_steps
 
         # Set value limits
@@ -172,21 +194,17 @@ class ItemChange:
                 print '  y_{} = {} * x_{} + {}'.format(i, slope, i, intercept)
         
     @property
-    def item_url(self):
-        return urlparse.urlunsplit(('https' if self.config.rest_ssl else 'http','{}:{}'.format(self.config.rest_hostname, self.config.rest_port), '/rest/items/{}'.format(self.item_name), None, None))
-
-    @property
     def time_to_next_step(self):
         if not self.started:
             # Not yet started; next time we have to do something is our start time.
             next_time = self.start_time
-        elif self.current_values is None or self.end_time <= time.time():
+        elif self.item.value is None or self.end_time <= time.time():
             # Somehow we've started, but haven't set a value yet.  Or it's
             # past our end time.  Either way, do something now.
             return 0
         else:
             # How long will it be before we next need to update?
-            next_values = [ cv + step for cv, step in zip(self.current_values, self.steps) ]
+            next_values = [ cv + step for cv, step in zip(self.item.value, self.steps) ]
             next_times = [ (nv - intercept) / slope if slope != 0 else float('inf') for nv, intercept, slope in zip(next_values, self.intercepts, self.slopes) ]
             next_time = min(next_times)
         return max(0, next_time - time.time())
@@ -201,8 +219,8 @@ class ItemChange:
         else:
             # If the starting value is unset, pull it from the current state on OpenHAB.
             if self.start_values is None:
-                self.set_current_value_from_openhab()
-                self.start_values = self.current_values
+                self.item.update_from_openhab()
+                self.start_values = self.item.value
                 self.calculate_params()
             ref_time = time.time()
             clamped_values = [min(max(int(round(slope * ref_time + intercept)),
@@ -210,12 +228,8 @@ class ItemChange:
                                   max_value)
                               for slope, intercept, min_value, max_value
                               in zip(self.slopes, self.intercepts, self.min_values, self.max_values)]
-        if clamped_values != self.current_values:
-            r = requests.post(self.item_url, ','.join([str(cv) for cv in clamped_values]))
-            r.raise_for_status()
-            self.current_values = clamped_values
-            if self.config.verbose:
-                print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.current_values)
+        if clamped_values != self.item.value:
+            self.item.update(clamped_values)
 
 class ItemSet:
     """When an item is set once."""
@@ -223,7 +237,7 @@ class ItemSet:
     def __init__(self, config, item_name, set_time, set_value):
         # Basics
         self.config = config
-        self.item_name = item_name
+        self.item = Item(config, item_name)
         self.set_time = set_time
         if is_nonstring_sequence(set_value):
             self.set_value = ','.join([str(v) for v in set_value])
@@ -237,27 +251,20 @@ class ItemSet:
         self.has_been_set = False
 
     def __repr__(self):
-        return '<ItemSet({}: {} {})>'.format(self.item_name, self.set_value, self.set_time)
+        return '<ItemSet({}: {} {})>'.format(self.item.name, self.set_value, self.set_time)
 
     @property
     def formatted_info(self):
-        return (time.strftime('%H:%M:%S', time.localtime(self.set_time)), '', self.item_name, '', self.set_value)
+        return (time.strftime('%H:%M:%S', time.localtime(self.set_time)), '', self.item.name, '', self.set_value)
     
-    @property
-    def item_url(self):
-        return urlparse.urlunsplit(('https' if self.config.rest_ssl else 'http','{}:{}'.format(self.config.rest_hostname, self.config.rest_port), '/rest/items/{}'.format(self.item_name), None, None))
-
     @property
     def time_to_next_step(self):
         return max(0, self.set_time - time.time())
         
     def set_item(self):
         if not self.has_been_set:
-            r = requests.post(self.item_url, self.set_value)
-            r.raise_for_status()
+            self.item.update(self.set_value)
             self.has_been_set = True
-            if self.config.verbose:
-                print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.item_name, self.set_value)
                 
 config = Config(parsed_args)
 
@@ -277,7 +284,7 @@ else:
     end_time = start_time + parsed_args.duration
     changes = [ItemChange(config, parsed_args.item, (start_time, end_time), (parsed_args.start, parsed_args.end), parsed_args.step)]
 
-changes.sort(key=lambda c: (c.start_time, c.end_time, c.item_name))
+changes.sort(key=lambda c: (c.start_time, c.end_time, c.item.name))
 if config.verbose:
     change_info = [c.formatted_info for c in changes]
     col_widths = [max([len(v) for v in col]) for col in zip(*change_info)]
