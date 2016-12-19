@@ -76,6 +76,15 @@ class Config:
         self.verbose = parsed_args.verbose or parsed_args.debug
         self.debug = parsed_args.debug
 
+        # monitor_item must be created last because we pass ourselves into it.
+        if 'monitor' in config_args:
+            self.monitor_item = Item(self, config_args['monitor']['item'])
+            if 'initialize' in config_args['monitor']:
+                self.monitor_item.update(config_args['monitor']['initialize'])
+            self.stop_on = config_args['monitor']['stop_on']
+        else:
+            self.monitor_item = None
+            
 class Item:
     def __init__(self, config, item_name, arity=1):
         self.config = config
@@ -104,8 +113,10 @@ class Item:
         s = json.loads(r.text)
         if s['type'] == 'Color' and self.arity == 1:
             self.value = int(s['state'].split(',')[-1])
-        else:
+        elif s['type'] in ('Dimmer', 'Number'):
             self.value = [int(v) for v in s['state'].split(',')]
+        else:
+            self.value = s['state']
         if self.config.verbose:
             print '{} {}: fetched current state {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.name, self.value)
 
@@ -278,7 +289,8 @@ if parsed_args.script is not None:
         exit(1)
     parsed_args.script.seek(0)
     changes = []
-    for c in toml.load(parsed_args.script)['changes']:
+    script = toml.load(parsed_args.script)
+    for c in script['changes']:
         changes.append(ItemChange.from_toml(config, c, start_time))
 else:
     end_time = start_time + parsed_args.duration
@@ -293,7 +305,6 @@ if config.verbose:
         print ' | '.join([v.ljust(w) for w, v in zip(col_widths, c)])
     print '-+-'.join(['-' * w for w in col_widths])
     
-foo = 0
 last_end_time = max([c.end_time for c in changes])
 while time.time() < last_end_time:
     # Fixed time reference so all comparisons will be on equal footing.
@@ -313,10 +324,11 @@ while time.time() < last_end_time:
         print loop_start, time.time()
         for c in changes:
             print c, c.time_to_next_step
-        if foo > 0:
-            exit(2)
-        foo += 1
     time.sleep(sleep_time)
+    if config.monitor_item is not None:
+        config.monitor_item.update_from_openhab()
+        if config.monitor_item.value == config.stop_on:
+            exit(0)
 
 # Ensure that the final values were hit.
 for c in changes:

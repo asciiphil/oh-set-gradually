@@ -1,9 +1,5 @@
 
-* Monitor an item to determine whether to continue.
-   Configuration is: item name, termination value (stop if the item ever
-   has this value), initialization value (optional, but set item to this
-   value before starting loop).
-
+* Monitor an item to in a sophisticated way determine whether to continue.
    Maybe allow a threshold?  Rather than "item == value", stop if "item <
    value" or "item > value".
 

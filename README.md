@@ -56,6 +56,27 @@ The `--host`, `--port`, and `--ssl` parameters can be used.  e.g.:
 Command line parameters override configuration file parameters.  If the
 config file has `ssl = true`, you can override it with `--no-ssl`.
 
+Early Termination
+-----------------
+
+If the configuration file contains a `[monitor]` section, its contents
+should define an item whose state can trigger early termination of the
+script's opration.  It may have the following keys:
+
+* `item` - **Required**.  The name of the item to monitor.
+* `stop_on` - **Required**.  If the item's current state matches this
+  value, the script will terminate immediately.
+* `initialize` - Optional.  If present, the item will be set to this value
+  before the script begins running.
+
+For example, if you have a `Switch` item named `keep_running`, you could
+use the following in your configuration file:
+
+    [monitor]
+    item = "keep_running"
+    initialize = "ON"
+    stop_on = "OFF"
+
 Scripts
 -------
 
