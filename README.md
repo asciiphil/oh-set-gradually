@@ -68,6 +68,9 @@ script's opration.  It may have the following keys:
   value, the script will terminate immediately.
 * `initialize` - Optional.  If present, the item will be set to this value
   before the script begins running.
+* `finalize` - Optional.  If present, the item will be set to this value
+  after the script has run to completion.  *This setting will not be used
+  if the script is terminated by the `stop_on` condition.*
 
 For example, if you have a `Switch` item named `keep_running`, you could
 use the following in your configuration file:
@@ -76,6 +79,7 @@ use the following in your configuration file:
     item = "keep_running"
     initialize = "ON"
     stop_on = "OFF"
+    finalize = "OFF"
 
 Scripts
 -------

@@ -82,6 +82,10 @@ class Config:
             if 'initialize' in config_args['monitor']:
                 self.monitor_item.update(config_args['monitor']['initialize'])
             self.stop_on = config_args['monitor']['stop_on']
+            if 'finalize' in config_args['monitor']:
+                self.monitor_finalize = config_args['monitor']['finalize']
+            else:
+                self.monitor_finalize = None
         else:
             self.monitor_item = None
             
@@ -333,3 +337,5 @@ while time.time() < last_end_time:
 # Ensure that the final values were hit.
 for c in changes:
     c.set_item()
+if config.monitor_item is not None and config.monitor_finalize is not None:
+    config.monitor_item.update(config.monitor_finalize)
