@@ -169,6 +169,7 @@ class ItemChange:
         self.steps = steps
         
         self.started = False
+        self.incomplete_update = False
         
         if self.start_values is not None:
             self.calculate_params()
@@ -244,7 +245,19 @@ class ItemChange:
                               for slope, intercept, min_value, max_value
                               in zip(self.slopes, self.intercepts, self.min_values, self.max_values)]
         if clamped_values != self.item.value:
-            self.item.update(clamped_values)
+            # The try ... except here is in case there's a problem
+            # updating OpenHAB.  If that happens, we just mark this
+            # item as incomplete (so it won't be pruned before hitting
+            # its final state) and return, so it'll be updated next
+            # time around.
+            try:
+                self.item.update(clamped_values)
+                self.incomplete_update = False
+            except requests.exceptions.HTTPError as e:
+                if self.config.debug:
+                    print 'Failed to update {}: {}'.format(self.item.name, e)
+                self.incomplete_update = True
+
 
 class ItemSet:
     """When an item is set once."""
@@ -320,7 +333,7 @@ while time.time() < last_end_time:
         c.set_item()
         need_to_prune = need_to_prune or c.end_time <= loop_start
     if need_to_prune:
-        changes = [c for c in changes if loop_start < c.end_time]
+        changes = [c for c in changes if loop_start < c.end_time and not c.incomplete_update]
     sleep_time = min([c.time_to_next_step for c in changes])
     if config.debug:
         print '--- Sleeping for {}s.'.format(sleep_time)
