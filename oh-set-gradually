@@ -204,7 +204,7 @@ class ItemChange:
         self.slopes = [ (ev - sv) / (self.end_time - self.start_time) for (sv, ev) in zip(self.start_values, self.end_values) ]
         self.intercepts = [ sv - slope * self.start_time for (sv, slope) in zip(self.start_values, self.slopes) ]
         if self.config.debug:
-            print self.item_name + ':'
+            print self.item.name + ':'
             for (i, (slope, intercept)) in enumerate(zip(self.slopes, self.intercepts)):
                 print '  y_{} = {} * x_{} + {}'.format(i, slope, i, intercept)
         
@@ -298,7 +298,7 @@ if parsed_args.script is not None:
         changes.append(ItemChange.from_toml(config, c, start_time))
 else:
     end_time = start_time + parsed_args.duration
-    changes = [ItemChange(config, parsed_args.item, (start_time, end_time), (parsed_args.start, parsed_args.end), parsed_args.step)]
+    changes = [ItemChange(config, parsed_args.item, (start_time, end_time), ([parsed_args.start], [parsed_args.end]), parsed_args.step)]
 
 changes.sort(key=lambda c: (c.start_time, c.end_time, c.item.name))
 if config.verbose:
