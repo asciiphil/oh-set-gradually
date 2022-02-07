@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 import argparse
 import collections
@@ -7,7 +7,7 @@ import json
 import math
 import sys
 import time
-import urlparse
+import urllib.parse
 
 import requests  # http://python-requests.org
 import toml      # https://github.com/uiri/toml
@@ -31,9 +31,9 @@ parser.add_argument('script', nargs='?', type=argparse.FileType('r'), help='Scri
 parsed_args = parser.parse_args()
 
 def is_nonstring_sequence(obj):
-    if isinstance(obj, basestring):
+    if isinstance(obj, str):
         return False
-    return isinstance(obj, collections.Sequence)
+    return isinstance(obj, collections.abc.Sequence)
 
 class Config:
     def __init__(self, parsed_args):
@@ -55,7 +55,7 @@ class Config:
             self.rest_ssl = parsed_args.ssl
         elif 'rest' in config_args and 'ssl' in config_args['rest']:
             if config_args['rest']['ssl'] not in (True, False):
-                print >>sys.stderr, 'rest.ssl config must be "true" or "false"'
+                print('rest.ssl config must be "true" or "false"', file=sys.stderr)
                 exit(1)
             self.rest_ssl = config_args['rest']['ssl']
         else:
@@ -64,8 +64,8 @@ class Config:
         if parsed_args.port is not None:
             self.rest_port = parsed_args.port
         elif 'rest' in config_args and 'port' in config_args['rest']:
-            if not isinstance(config_args['rest']['port'], (int, long)):
-                print >>sys.stderr, 'rest.port config must be an integer'
+            if not isinstance(config_args['rest']['port'], int):
+                print('rest.port config must be an integer', file=sys.stderr)
                 exit(1)
             self.rest_port = config_args['rest']['port']
         elif self.rest_ssl:
@@ -98,18 +98,22 @@ class Item:
 
     @property
     def item_url(self):
-        return urlparse.urlunsplit(('https' if self.config.rest_ssl else 'http','{}:{}'.format(self.config.rest_hostname, self.config.rest_port), '/rest/items/{}'.format(self.name), None, None))
+        return urllib.parse.urlunsplit(('https' if self.config.rest_ssl else 'http','{}:{}'.format(self.config.rest_hostname, self.config.rest_port), '/rest/items/{}'.format(self.name), None, None))
 
     def update(self, new_value):
         if is_nonstring_sequence(new_value):
             new_value_str = ','.join([str(v) for v in new_value])
         else:
             new_value_str = str(new_value)
-        r = requests.post(self.item_url, new_value_str)
+        r = requests.post(self.item_url,
+                          data=new_value_str,
+                          headers={
+                              'Content-Type': 'text/plain',
+                          })
         r.raise_for_status()
         self.value = new_value
         if self.config.verbose:
-            print '{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.name, self.value)
+            print('{} {}: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.name, self.value))
             
     def update_from_openhab(self):
         r = requests.get(self.item_url)
@@ -122,7 +126,7 @@ class Item:
         else:
             self.value = s['state']
         if self.config.verbose:
-            print '{} {}: fetched current state {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.name, self.value)
+            print('{} {}: fetched current state {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), self.name, self.value))
 
 class ItemChange:
     @staticmethod
@@ -189,7 +193,7 @@ class ItemChange:
         # Check step direction, fix if necessary.
         implied_steps = [ math.copysign(1, ev - sv) for (sv, ev) in zip(self.start_values, self.end_values) ]
         if self.steps != implied_steps:
-            print >>sys.stderr, '{}: {}..{} sign(s) mismatch: requested {}, but should be {}.'.format(self.item.name, self.start_values, self.end_values, self.steps, implied_steps)
+            print('{}: {}..{} sign(s) mismatch: requested {}, but should be {}.'.format(self.item.name, self.start_values, self.end_values, self.steps, implied_steps), file=sys.stderr)
             self.steps = implied_steps
 
         # Set value limits
@@ -205,9 +209,9 @@ class ItemChange:
         self.slopes = [ (ev - sv) / (self.end_time - self.start_time) for (sv, ev) in zip(self.start_values, self.end_values) ]
         self.intercepts = [ sv - slope * self.start_time for (sv, slope) in zip(self.start_values, self.slopes) ]
         if self.config.debug:
-            print self.item.name + ':'
+            print(self.item.name + ':')
             for (i, (slope, intercept)) in enumerate(zip(self.slopes, self.intercepts)):
-                print '  y_{} = {} * x_{} + {}'.format(i, slope, i, intercept)
+                print('  y_{} = {} * x_{} + {}'.format(i, slope, i, intercept))
         
     @property
     def time_to_next_step(self):
@@ -255,7 +259,7 @@ class ItemChange:
                 self.incomplete_update = False
             except requests.exceptions.HTTPError as e:
                 if self.config.debug:
-                    print 'Failed to update {}: {}'.format(self.item.name, e)
+                    print('Failed to update {}: {}'.format(self.item.name, e))
                 self.incomplete_update = True
 
 
@@ -276,6 +280,7 @@ class ItemSet:
         self.start_time = self.set_time
         self.end_time = self.set_time
         
+        self.incomplete_update = False
         self.has_been_set = False
 
     def __repr__(self):
@@ -302,7 +307,7 @@ if parsed_args.script is not None:
        parsed_args.duration is not None or \
        parsed_args.step is not None or \
        parsed_args.item is not None:
-        print >>sys.stderr, '--item is mutually exclusive with giving a script.'
+        print('--item is mutually exclusive with giving a script.', file=sys.stderr)
         exit(1)
     parsed_args.script.seek(0)
     changes = []
@@ -317,10 +322,10 @@ changes.sort(key=lambda c: (c.start_time, c.end_time, c.item.name))
 if config.verbose:
     change_info = [c.formatted_info for c in changes]
     col_widths = [max([len(v) for v in col]) for col in zip(*change_info)]
-    print '-+-'.join(['-' * w for w in col_widths])
+    print('-+-'.join(['-' * w for w in col_widths]))
     for c in change_info:
-        print ' | '.join([v.ljust(w) for w, v in zip(col_widths, c)])
-    print '-+-'.join(['-' * w for w in col_widths])
+        print(' | '.join([v.ljust(w) for w, v in zip(col_widths, c)]))
+    print('-+-'.join(['-' * w for w in col_widths]))
     
 last_end_time = max([c.end_time for c in changes])
 while time.time() < last_end_time:
@@ -336,11 +341,11 @@ while time.time() < last_end_time:
         changes = [c for c in changes if loop_start < c.end_time and not c.incomplete_update]
     sleep_time = min([c.time_to_next_step for c in changes])
     if config.debug:
-        print '--- Sleeping for {}s.'.format(sleep_time)
+        print('--- Sleeping for {}s.'.format(sleep_time))
     if sleep_time == 0:
-        print loop_start, time.time()
+        print(loop_start, time.time())
         for c in changes:
-            print c, c.time_to_next_step
+            print(c, c.time_to_next_step)
     time.sleep(sleep_time)
     if config.monitor_item is not None:
         config.monitor_item.update_from_openhab()
